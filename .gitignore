@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+*.egg
+.Python
+
+# Virtual environments
+.env/
+.venv/
+env/
+venv/
+ENV/
+
+# LangGraph/Studio
+checkpoints/
+logs/
+.state/
+
+# VSCode / IDE
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Secrets
+.env
+*.key
+*.pem
+
+# Node (if you mix with JS/React frontend)
+node_modules/
+dist/
+build/

@@ -1,0 +1,11 @@
+{
+  "dependencies": ["."],
+  "graphs": {
+    "compliance_agent": "./src/compliance_workflow.py:compliance_agent_graph"
+  },
+  "env": ".env",
+  "python_version": "3.12",
+  "timeout": 300,
+  "memory_limit": "1Gi",
+  "cpu_limit": "1000m"
+}

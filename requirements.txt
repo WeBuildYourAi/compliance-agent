@@ -1,0 +1,19 @@
+# LangGraph Platform Agent Requirements
+langgraph
+langchain
+langchain-core
+langchain-openai
+langchain-anthropic
+
+# Environment management
+python-dotenv
+
+# HTTP and async support (required for Perplexity API)
+httpx
+aiohttp
+
+# Data validation
+pydantic
+
+# Utilities
+python-dateutil
