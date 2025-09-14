@@ -19,7 +19,9 @@ dependencies = [
     "python-dotenv",
     "pydantic",
     "python-dateutil",
-    "aiohttp"
+    "aiohttp",
+    "azure-storage-blob",
+    "azure-cosmos"
 ]
 
 [project.optional-dependencies]

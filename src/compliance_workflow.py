@@ -25,6 +25,7 @@ from concurrent.futures import ThreadPoolExecutor
 # Import utilities - now using absolute imports from current directory
 from llm_utils import llm_manager
 from config import config
+from storage_utils import storage_manager, cosmos_manager
 
 # Configure logging for LangGraph Platform
 logging.basicConfig(
@@ -276,7 +277,47 @@ async def analyze_project_requirements(state: ComplianceAgentState) -> Complianc
                 }
                 required_documents.append(doc_req)
             
-            # Update state with extracted information
+            # Save to storage (if available)
+        if document_results and storage_manager.blob_service_client:
+            # Save the consolidated report to blob storage
+            report_content = json.dumps(project_deliverables, indent=2)
+            storage_result = await storage_manager.upload_document(
+                document_content=report_content,
+                document_type="compliance_assessment",
+                document_id=state.get("request_id"),
+                metadata={
+                    "user_id": state.get("user_id"),
+                    "session_id": state.get("session_id"),
+                    "total_documents": total_docs,
+                    "successful_documents": successful_docs
+                }
+            )
+            
+            # Save metadata to Cosmos DB
+            if storage_result.get("success"):
+                cosmos_result = await cosmos_manager.save_compliance_record(
+                    document_id=state.get("request_id"),
+                    document_type="compliance_assessment",
+                    assessment_results={
+                        "compliance_category": state.get("compliance_category"),
+                        "identified_frameworks": [f.value for f in state.get("identified_frameworks", [])],
+                        "risk_analysis": state.get("risk_analysis", {}),
+                        "compliance_gaps": state.get("compliance_gaps", []),
+                        "control_recommendations": state.get("control_recommendations", []),
+                        "compliance_score": successful_docs / total_docs if total_docs > 0 else 0
+                    },
+                    document_content=project_deliverables,
+                    metadata={
+                        "request_id": state.get("request_id"),
+                        "user_id": state.get("user_id"),
+                        "session_id": state.get("session_id"),
+                        "blob_url": storage_result.get("url")
+                    }
+                )
+                
+                logger.info(f"Compliance assessment saved: {state.get('request_id')}")
+        
+        # Update state with extracted information
             state["project_type"] = project_type
             state["identified_frameworks"] = [identified_frameworks] if isinstance(identified_frameworks, ComplianceFramework) else identified_frameworks
             state["project_complexity"] = "very_high"  # Detailed blueprints are complex
