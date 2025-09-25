@@ -149,6 +149,18 @@ class ComplianceAgentState(TypedDict):
     updated_at: datetime
     processing_duration: Optional[float]
 
+def ensure_state_initialization(state: ComplianceAgentState) -> ComplianceAgentState:
+    """Ensure all required state fields are initialized"""
+    if "messages" not in state:
+        state["messages"] = []
+    if "trace_data" not in state:
+        state["trace_data"] = {}
+    if "document_results" not in state:
+        state["document_results"] = {}
+    if "document_status" not in state:
+        state["document_status"] = {}
+    return state
+
 def add_trace_data(state: ComplianceAgentState, stage: str, data: Dict[str, Any]) -> ComplianceAgentState:
     """Add trace data for LangSmith monitoring"""
     if "trace_data" not in state:
@@ -165,6 +177,9 @@ def add_trace_data(state: ComplianceAgentState, stage: str, data: Dict[str, Any]
 def handle_node_error(state: ComplianceAgentState, error: Exception, node_name: str) -> ComplianceAgentState:
     """Centralized error handling for all nodes"""
     logger.error(f"Error in {node_name}: {error}", exc_info=True)
+    
+    # Ensure state is properly initialized
+    state = ensure_state_initialization(state)
     
     state["error_message"] = f"{node_name} failed: {str(error)}"
     state["retry_count"] = state.get("retry_count", 0) + 1
@@ -236,6 +251,9 @@ async def analyze_project_requirements(state: ComplianceAgentState) -> Complianc
     try:
         logger.info(f"Analyzing project requirements for request: {state.get('request_id')}")
         
+        # Ensure state is properly initialized
+        state = ensure_state_initialization(state)
+        
         # Update status
         state["status"] = AssessmentStatus.ANALYZING_PROJECT
         state["current_stage"] = "project_analysis"
@@ -277,47 +295,7 @@ async def analyze_project_requirements(state: ComplianceAgentState) -> Complianc
                 }
                 required_documents.append(doc_req)
             
-            # Save to storage (if available)
-        if document_results and storage_manager.blob_service_client:
-            # Save the consolidated report to blob storage
-            report_content = json.dumps(project_deliverables, indent=2)
-            storage_result = await storage_manager.upload_document(
-                document_content=report_content,
-                document_type="compliance_assessment",
-                document_id=state.get("request_id"),
-                metadata={
-                    "user_id": state.get("user_id"),
-                    "session_id": state.get("session_id"),
-                    "total_documents": total_docs,
-                    "successful_documents": successful_docs
-                }
-            )
-            
-            # Save metadata to Cosmos DB
-            if storage_result.get("success"):
-                cosmos_result = await cosmos_manager.save_compliance_record(
-                    document_id=state.get("request_id"),
-                    document_type="compliance_assessment",
-                    assessment_results={
-                        "compliance_category": state.get("compliance_category"),
-                        "identified_frameworks": [f.value for f in state.get("identified_frameworks", [])],
-                        "risk_analysis": state.get("risk_analysis", {}),
-                        "compliance_gaps": state.get("compliance_gaps", []),
-                        "control_recommendations": state.get("control_recommendations", []),
-                        "compliance_score": successful_docs / total_docs if total_docs > 0 else 0
-                    },
-                    document_content=project_deliverables,
-                    metadata={
-                        "request_id": state.get("request_id"),
-                        "user_id": state.get("user_id"),
-                        "session_id": state.get("session_id"),
-                        "blob_url": storage_result.get("url")
-                    }
-                )
-                
-                logger.info(f"Compliance assessment saved: {state.get('request_id')}")
-        
-        # Update state with extracted information
+            # Update state with extracted information
             state["project_type"] = project_type
             state["identified_frameworks"] = [identified_frameworks] if isinstance(identified_frameworks, ComplianceFramework) else identified_frameworks
             state["project_complexity"] = "very_high"  # Detailed blueprints are complex
@@ -389,6 +367,9 @@ async def create_document_plans(state: ComplianceAgentState) -> ComplianceAgentS
     
     try:
         logger.info("Creating detailed document execution plans")
+        
+        # Ensure state is properly initialized
+        state = ensure_state_initialization(state)
         
         state["status"] = AssessmentStatus.PLANNING_DOCUMENTS
         state["current_stage"] = "document_planning"
@@ -625,6 +606,9 @@ async def execute_document_generation(state: ComplianceAgentState) -> Compliance
     try:
         logger.info("Executing document generation")
         
+        # Ensure state is properly initialized
+        state = ensure_state_initialization(state)
+        
         state["status"] = AssessmentStatus.GENERATING_DOCUMENTS
         state["current_stage"] = "document_generation"
         state["updated_at"] = datetime.utcnow()
@@ -713,6 +697,9 @@ async def consolidate_project_results(state: ComplianceAgentState) -> Compliance
     
     try:
         logger.info("Consolidating project results and creating deliverables")
+        
+        # Ensure state is properly initialized
+        state = ensure_state_initialization(state)
         
         state["status"] = AssessmentStatus.CONSOLIDATING_RESULTS
         state["current_stage"] = "result_consolidation"
