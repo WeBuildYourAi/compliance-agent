@@ -151,13 +151,13 @@ class ComplianceAgentState(TypedDict):
 
 def ensure_state_initialization(state: ComplianceAgentState) -> ComplianceAgentState:
     """Ensure all required state fields are initialized"""
-    if "messages" not in state:
+    if "messages" not in state or state["messages"] is None:
         state["messages"] = []
-    if "trace_data" not in state:
+    if "trace_data" not in state or state["trace_data"] is None:
         state["trace_data"] = {}
-    if "document_results" not in state:
+    if "document_results" not in state or state["document_results"] is None:
         state["document_results"] = {}
-    if "document_status" not in state:
+    if "document_status" not in state or state["document_status"] is None:
         state["document_status"] = {}
     return state
 
