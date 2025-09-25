@@ -96,6 +96,11 @@ class ComplianceAgentState(TypedDict):
     deliverable_blueprint: Optional[List[Dict[str, Any]]]  # Detailed deliverable specifications from content-orchestrator
     request_id: str
     
+    # New fields from research synthesis and user interaction
+    user_responses: Optional[Dict[str, Any]]  # User's answers to the questions
+    interaction_questions: Optional[List[Dict[str, Any]]]  # The actual questions that were asked (for full context)
+    project_brief: Optional[Dict[str, Any]]  # Enhanced with research insights
+    
     # Session Management
     user_id: Optional[str]
     session_id: Optional[str]
@@ -151,6 +156,7 @@ class ComplianceAgentState(TypedDict):
 
 def ensure_state_initialization(state: ComplianceAgentState) -> ComplianceAgentState:
     """Ensure all required state fields are initialized"""
+    # Core message and data structures
     if "messages" not in state or state["messages"] is None:
         state["messages"] = []
     if "trace_data" not in state or state["trace_data"] is None:
@@ -159,6 +165,45 @@ def ensure_state_initialization(state: ComplianceAgentState) -> ComplianceAgentS
         state["document_results"] = {}
     if "document_status" not in state or state["document_status"] is None:
         state["document_status"] = {}
+    
+    # New fields from research synthesis and user interaction
+    if "user_responses" not in state or state["user_responses"] is None:
+        state["user_responses"] = {}
+    if "interaction_questions" not in state or state["interaction_questions"] is None:
+        state["interaction_questions"] = []
+    if "project_brief" not in state or state["project_brief"] is None:
+        state["project_brief"] = {}
+    if "deliverable_blueprint" not in state or state["deliverable_blueprint"] is None:
+        state["deliverable_blueprint"] = []
+    
+    # Other core fields that might be missing
+    if "identified_frameworks" not in state or state["identified_frameworks"] is None:
+        state["identified_frameworks"] = []
+    if "geographic_scope" not in state or state["geographic_scope"] is None:
+        state["geographic_scope"] = []
+    if "required_documents" not in state or state["required_documents"] is None:
+        state["required_documents"] = []
+    if "document_plans" not in state or state["document_plans"] is None:
+        state["document_plans"] = []
+    if "risk_analysis" not in state or state["risk_analysis"] is None:
+        state["risk_analysis"] = {}
+    if "identified_risks" not in state or state["identified_risks"] is None:
+        state["identified_risks"] = []
+    if "compliance_gaps" not in state or state["compliance_gaps"] is None:
+        state["compliance_gaps"] = []
+    if "control_recommendations" not in state or state["control_recommendations"] is None:
+        state["control_recommendations"] = []
+    if "implementation_plan" not in state or state["implementation_plan"] is None:
+        state["implementation_plan"] = {}
+    if "executive_summary" not in state or state["executive_summary"] is None:
+        state["executive_summary"] = {}
+    if "action_items" not in state or state["action_items"] is None:
+        state["action_items"] = []
+    if "compliance_report" not in state or state["compliance_report"] is None:
+        state["compliance_report"] = {}
+    if "project_deliverables" not in state or state["project_deliverables"] is None:
+        state["project_deliverables"] = {}
+    
     return state
 
 def add_trace_data(state: ComplianceAgentState, stage: str, data: Dict[str, Any]) -> ComplianceAgentState:
@@ -250,6 +295,7 @@ async def analyze_project_requirements(state: ComplianceAgentState) -> Complianc
     
     try:
         logger.info(f"Analyzing project requirements for request: {state.get('request_id')}")
+        logger.info(f"Available data - user_responses: {len(user_responses)} items, interaction_questions: {len(interaction_questions)} items, project_brief: {'enhanced' if project_brief else 'basic'}, deliverable_blueprint: {len(deliverable_blueprint)} items")
         
         # Ensure state is properly initialized
         state = ensure_state_initialization(state)
@@ -262,9 +308,14 @@ async def analyze_project_requirements(state: ComplianceAgentState) -> Complianc
         user_prompt = state.get("user_prompt", "")
         project_plan = state.get("project_plan", {})
         deliverable_blueprint = state.get("deliverable_blueprint", [])
+        user_responses = state.get("user_responses", {})
+        interaction_questions = state.get("interaction_questions", [])
+        project_brief = state.get("project_brief", {})
         
         if not user_prompt.strip():
             raise ValueError("User prompt cannot be empty")
+        
+        logger.info(f"Available context - user_responses: {len(user_responses)} items, interaction_questions: {len(interaction_questions)} items, project_brief: {'enhanced' if project_brief else 'basic'}, deliverable_blueprint: {len(deliverable_blueprint)} items")
         
         # If we have a deliverable blueprint from content-orchestrator, use it directly
         if deliverable_blueprint:
@@ -303,8 +354,26 @@ async def analyze_project_requirements(state: ComplianceAgentState) -> Complianc
             state["parallel_execution"] = len(required_documents) > 3  # Parallel for many docs
             state["required_documents"] = required_documents
             
-            # Extract additional context from project_plan if available
-            if project_plan:
+            # Extract additional context from project_brief (enhanced with research insights)
+            if project_brief:
+                state["industry_sector"] = project_brief.get("industry_sector", project_plan.get("industry_sector", "not_specified"))
+                state["organization_size"] = project_brief.get("organization_size", project_plan.get("organization_size", "not_specified"))
+                state["geographic_scope"] = project_brief.get("geographic_scope", project_plan.get("geographic_scope", []))
+                
+                # Extract compliance context from research insights
+                if "compliance_context" in project_brief:
+                    compliance_context = project_brief["compliance_context"]
+                    if "frameworks" in compliance_context:
+                        # Override or enhance frameworks based on research
+                        research_frameworks = []
+                        for fw in compliance_context["frameworks"]:
+                            try:
+                                research_frameworks.append(ComplianceFramework(fw.lower().replace("-", "_")))
+                            except ValueError:
+                                logger.warning(f"Unknown framework from research: {fw}")
+                        if research_frameworks:
+                            identified_frameworks = research_frameworks
+            elif project_plan:
                 state["industry_sector"] = project_plan.get("industry_sector", "not_specified")
                 state["organization_size"] = project_plan.get("organization_size", "not_specified")
                 state["geographic_scope"] = project_plan.get("geographic_scope", [])
@@ -321,13 +390,47 @@ async def analyze_project_requirements(state: ComplianceAgentState) -> Complianc
             
             # [Keep original project analysis logic here as fallback]
             project_analysis_prompt = f"""
-            You are a compliance project analyst. Analyze the following compliance request and project plan to determine the scope, complexity, and required deliverables.
+            You are a compliance project analyst. Analyze the following compliance request and available context to determine the scope, complexity, and required deliverables.
 
             USER REQUEST: {user_prompt}
             
             PROJECT PLAN: {json.dumps(project_plan, indent=2) if project_plan else "No structured project plan provided"}
             
-            [Rest of original prompt...]
+            PROJECT BRIEF (with research insights): {json.dumps(project_brief, indent=2) if project_brief else "No enhanced project brief available"}
+            
+            USER RESPONSES TO QUESTIONS: {json.dumps(user_responses, indent=2) if user_responses else "No user responses available"}
+            
+            INTERACTION QUESTIONS ASKED: {json.dumps(interaction_questions, indent=2) if interaction_questions else "No interaction questions available"}
+            
+            Based on this comprehensive context, provide a detailed project analysis in JSON format:
+            {{
+                "project_type": "compliance_assessment|privacy_policy_pack|audit_preparation|risk_analysis|policy_review|implementation_plan|multi_document_pack",
+                "identified_frameworks": ["gdpr", "sox", "hipaa", "ccpa", "pci_dss", "iso_27001", "nist", "soc2"],
+                "project_complexity": "low|medium|high|very_high",
+                "estimated_duration": "1-2 weeks|2-4 weeks|1-3 months|3-6 months|6+ months",
+                "parallel_execution_suitable": true,
+                "required_documents": [
+                    {{
+                        "document_type": "privacy_policy|compliance_checklist|dpia|ropa|training_materials|audit_report",
+                        "document_title": "Document Title",
+                        "priority": "critical|high|medium|low",
+                        "complexity": "low|medium|high",
+                        "estimated_effort": "low|medium|high",
+                        "target_audience": "legal|technical|executive|end_users|auditors",
+                        "frameworks_applicable": ["gdpr", "sox"]
+                    }}
+                ],
+                "industry_context": "extracted from user responses and project brief",
+                "organization_context": "size and structure context",
+                "geographic_context": ["regions or countries"]
+            }}
+            
+            ANALYSIS REQUIREMENTS:
+            1. Prioritize information from the project_brief as it contains research insights
+            2. Use user_responses to understand specific organizational needs and constraints
+            3. Consider interaction_questions to understand what areas were explored
+            4. Determine appropriate compliance frameworks based on industry, geography, and user responses
+            5. Plan document complexity and effort based on organizational size and technical capability
             """
             
             # Execute fallback analysis
@@ -406,6 +509,10 @@ async def create_document_plans(state: ComplianceAgentState) -> ComplianceAgentS
             - Industry: {state.get('industry_sector', 'Not specified')}
             - Organization Size: {state.get('organization_size', 'Not specified')}
             - Geographic Scope: {', '.join(state.get('geographic_scope', []))}
+            
+            USER CONTEXT (for personalization):
+            - User Responses: {json.dumps(state.get('user_responses', {}), indent=2) if state.get('user_responses') else 'No user responses available'}
+            - Project Brief: {json.dumps(state.get('project_brief', {}), indent=2) if state.get('project_brief') else 'No enhanced project brief available'}
             
             Create a detailed execution plan in JSON format:
             {{
