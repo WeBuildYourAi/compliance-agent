@@ -1,7 +1,8 @@
 {
   "dependencies": ["."],
   "graphs": {
-    "compliance_agent": "./src/compliance_workflow.py:compliance_agent_graph"
+    "compliance_agent": "./src/compliance_workflow.py:compliance_agent_graph",
+    "marketing_agent": "./src/marketing_workflow.py:marketing_document_graph"
   },
   "env": ".env",
   "python_version": "3.12",

@@ -21,3 +21,9 @@ python-dateutil
 # Azure Storage (Optional - for production deployment)
 azure-storage-blob
 azure-cosmos
+
+# Document Generation
+python-docx
+reportlab
+openpyxl
+Pillow
