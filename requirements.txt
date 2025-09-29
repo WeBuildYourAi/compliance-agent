@@ -22,7 +22,7 @@ python-dateutil
 azure-storage-blob
 azure-cosmos
 
-# Document Generation
+# Document Generation (Optional but recommended)
 python-docx
 reportlab
 openpyxl

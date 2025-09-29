@@ -26,8 +26,7 @@ from concurrent.futures import ThreadPoolExecutor
 from llm_utils import llm_manager
 from config import config
 from storage_utils import storage_manager, cosmos_manager
-from document_generators import document_generator
-from specialized_generators import specialized_generators
+from document_service import compliance_document_service
 
 # Configure logging for LangGraph Platform
 logging.basicConfig(
@@ -297,7 +296,6 @@ async def analyze_project_requirements(state: ComplianceAgentState) -> Complianc
     
     try:
         logger.info(f"Analyzing project requirements for request: {state.get('request_id')}")
-        logger.info(f"Available data - user_responses: {len(user_responses)} items, interaction_questions: {len(interaction_questions)} items, project_brief: {'enhanced' if project_brief else 'basic'}, deliverable_blueprint: {len(deliverable_blueprint)} items")
         
         # Ensure state is properly initialized
         state = ensure_state_initialization(state)
@@ -314,10 +312,10 @@ async def analyze_project_requirements(state: ComplianceAgentState) -> Complianc
         interaction_questions = state.get("interaction_questions", [])
         project_brief = state.get("project_brief", {})
         
+        logger.info(f"Available data - user_responses: {len(user_responses)} items, interaction_questions: {len(interaction_questions)} items, project_brief: {'enhanced' if project_brief else 'basic'}, deliverable_blueprint: {len(deliverable_blueprint)} items")
+        
         if not user_prompt.strip():
             raise ValueError("User prompt cannot be empty")
-        
-        logger.info(f"Available context - user_responses: {len(user_responses)} items, interaction_questions: {len(interaction_questions)} items, project_brief: {'enhanced' if project_brief else 'basic'}, deliverable_blueprint: {len(deliverable_blueprint)} items")
         
         # If we have a deliverable blueprint from content-orchestrator, use it directly
         if deliverable_blueprint:
@@ -802,7 +800,7 @@ async def execute_document_generation(state: ComplianceAgentState) -> Compliance
         return handle_node_error(state, e, "execute_document_generation")
 
 async def generate_document_files(state: ComplianceAgentState) -> ComplianceAgentState:
-    """Generate actual DOCX/PDF files from JSON document content"""
+    """Generate actual DOCX/PDF/Excel files from JSON document content"""
     
     try:
         logger.info("Generating document files from JSON content")
@@ -839,199 +837,82 @@ async def generate_document_files(state: ComplianceAgentState) -> ComplianceAgen
             doc_metadata = doc_content.get("document_metadata", {})
             doc_type = doc_metadata.get("document_type", "compliance_checklist")
             
-            # Determine which generator to use based on document type
-            if doc_type in ["ropa", "records_of_processing"]:
-                # Use specialized Excel generator for ROPA
-                logger.info(f"Generating ROPA Excel for {doc_id}")
-                try:
-                    framework = frameworks[0].value if frameworks else "gdpr"
-                    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-                    base_filename = f"{framework}_{doc_type}_{company_name.replace(' ', '_')}_{timestamp}"
-                    
-                    excel_path = specialized_generators.generate_ropa_excel(
-                        doc_content,
-                        framework,
-                        company_name,
-                        base_filename
-                    )
-                    
-                    file_url = f"computer:///mnt/user-data/outputs/{excel_path.name}"
-                    generated_files[doc_id] = {"xlsx": str(excel_path)}
+            logger.info(f"Generating files for {doc_id} - type: {doc_type}")
+            
+            try:
+                framework = frameworks[0].value if frameworks else "gdpr"
+                
+                # Determine formats based on document type
+                doc_type_lower = doc_type.lower()
+                
+                # Excel-based documents
+                if any(x in doc_type_lower for x in ["ropa", "records_of_processing", "dpia", 
+                                                      "checklist", "vendor", "training"]):
+                    formats = ["xlsx"]  # Excel format for structured data
+                # Public-facing documents
+                elif any(x in doc_type_lower for x in ["privacy_policy", "privacy_notice", "cookie"]):
+                    formats = ["docx", "pdf"]  # Both for public docs
+                # Formal reports
+                elif any(x in doc_type_lower for x in ["audit_report", "breach_response"]):
+                    formats = ["pdf"]  # PDF only for formal reports
+                # Contracts and agreements
+                elif any(x in doc_type_lower for x in ["dpa", "contract", "agreement"]):
+                    formats = ["docx", "pdf"]  # Both for contracts
+                else:
+                    formats = ["docx", "pdf"]  # Default to both
+                
+                # Generate documents using the document service
+                files = await compliance_document_service.generate_document_package(
+                    doc_content,
+                    doc_type,
+                    framework,
+                    company_name,
+                    formats
+                )
+                
+                generated_files[doc_id] = files
+                
+                # Add URLs for each generated format
+                for fmt, filepath in files.items():
+                    # Extract filename from path
+                    from pathlib import Path
+                    filename = Path(filepath).name
+                    file_url = f"computer:///mnt/user-data/outputs/{filename}"
                     document_urls.append(file_url)
                     
                     document_manifest.append({
                         "document_id": doc_id,
-                        "document_type": "ROPA",
-                        "format": "Excel",
+                        "document_type": doc_type.replace('_', ' ').title(),
+                        "format": fmt.upper(),
                         "url": file_url,
-                        "filename": excel_path.name
+                        "filename": filename
                     })
-                    
-                except Exception as e:
-                    logger.error(f"Error generating ROPA Excel for {doc_id}: {e}")
-            
-            elif doc_type == "dpia":
-                # Use specialized DPIA generator
-                logger.info(f"Generating structured DPIA for {doc_id}")
+                
+            except Exception as e:
+                logger.error(f"Error generating documents for {doc_id}: {e}")
+                # Try to generate at least a JSON fallback
                 try:
-                    framework = frameworks[0].value if frameworks else "gdpr"
                     timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
                     base_filename = f"{framework}_{doc_type}_{company_name.replace(' ', '_')}_{timestamp}"
-                    
-                    dpia_path = specialized_generators.generate_dpia_structured(
+                    json_path = await compliance_document_service.create_json_fallback(
                         doc_content,
-                        framework,
-                        company_name,
                         base_filename
                     )
+                    filename = Path(str(json_path)).name
+                    file_url = f"computer:///mnt/user-data/outputs/{filename}"
                     
-                    file_url = f"computer:///mnt/user-data/outputs/{dpia_path.name}"
-                    generated_files[doc_id] = {"xlsx": str(dpia_path)}
+                    generated_files[doc_id] = {"json": str(json_path)}
                     document_urls.append(file_url)
                     
                     document_manifest.append({
                         "document_id": doc_id,
-                        "document_type": "DPIA",
-                        "format": "Excel",
+                        "document_type": doc_type.replace('_', ' ').title(),
+                        "format": "JSON",
                         "url": file_url,
-                        "filename": dpia_path.name
+                        "filename": filename
                     })
-                    
-                except Exception as e:
-                    logger.error(f"Error generating DPIA for {doc_id}: {e}")
-            
-            elif doc_type == "compliance_checklist":
-                # Use specialized checklist generator
-                logger.info(f"Generating compliance checklist for {doc_id}")
-                try:
-                    framework = frameworks[0].value if frameworks else "gdpr"
-                    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-                    base_filename = f"{framework}_{doc_type}_{company_name.replace(' ', '_')}_{timestamp}"
-                    
-                    checklist_path = specialized_generators.generate_compliance_checklist_excel(
-                        doc_content,
-                        framework,
-                        company_name,
-                        base_filename
-                    )
-                    
-                    file_url = f"computer:///mnt/user-data/outputs/{checklist_path.name}"
-                    generated_files[doc_id] = {"xlsx": str(checklist_path)}
-                    document_urls.append(file_url)
-                    
-                    document_manifest.append({
-                        "document_id": doc_id,
-                        "document_type": "Compliance Checklist",
-                        "format": "Excel",
-                        "url": file_url,
-                        "filename": checklist_path.name
-                    })
-                    
-                except Exception as e:
-                    logger.error(f"Error generating checklist for {doc_id}: {e}")
-            
-            elif doc_type == "training_materials":
-                # Use specialized training materials generator
-                logger.info(f"Generating training materials for {doc_id}")
-                try:
-                    framework = frameworks[0].value if frameworks else "gdpr"
-                    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-                    base_filename = f"{framework}_{doc_type}_{company_name.replace(' ', '_')}_{timestamp}"
-                    
-                    training_path = specialized_generators.generate_training_materials_structured(
-                        doc_content,
-                        framework,
-                        company_name,
-                        base_filename
-                    )
-                    
-                    file_url = f"computer:///mnt/user-data/outputs/{training_path.name}"
-                    generated_files[doc_id] = {"xlsx": str(training_path)}
-                    document_urls.append(file_url)
-                    
-                    document_manifest.append({
-                        "document_id": doc_id,
-                        "document_type": "Training Materials",
-                        "format": "Excel",
-                        "url": file_url,
-                        "filename": training_path.name
-                    })
-                    
-                except Exception as e:
-                    logger.error(f"Error generating training materials for {doc_id}: {e}")
-            
-            elif doc_type == "vendor_assessment":
-                # Use specialized vendor assessment generator
-                logger.info(f"Generating vendor assessment for {doc_id}")
-                try:
-                    framework = frameworks[0].value if frameworks else "gdpr"
-                    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-                    base_filename = f"{framework}_{doc_type}_{company_name.replace(' ', '_')}_{timestamp}"
-                    
-                    vendor_path = specialized_generators.generate_vendor_assessment_excel(
-                        doc_content,
-                        framework,
-                        company_name,
-                        base_filename
-                    )
-                    
-                    file_url = f"computer:///mnt/user-data/outputs/{vendor_path.name}"
-                    generated_files[doc_id] = {"xlsx": str(vendor_path)}
-                    document_urls.append(file_url)
-                    
-                    document_manifest.append({
-                        "document_id": doc_id,
-                        "document_type": "Vendor Assessment",
-                        "format": "Excel",
-                        "url": file_url,
-                        "filename": vendor_path.name
-                    })
-                    
-                except Exception as e:
-                    logger.error(f"Error generating vendor assessment for {doc_id}: {e}")
-            
-            else:
-                # Use standard DOCX/PDF generator for other document types
-                logger.info(f"Generating DOCX/PDF for {doc_id} - type: {doc_type}")
-                try:
-                    framework = frameworks[0].value if frameworks else "gdpr"
-                    
-                    # Determine formats based on document type
-                    if doc_type in ["privacy_policy", "privacy_notice", "cookie_policy"]:
-                        formats = ["docx", "pdf"]  # Both for public-facing docs
-                    elif doc_type in ["audit_report", "breach_response"]:
-                        formats = ["pdf"]  # PDF only for formal reports
-                    elif doc_type in ["dpa_template", "contract"]:
-                        formats = ["docx", "pdf"]  # Both for contracts
-                    else:
-                        formats = ["docx", "pdf"]  # Default to both
-                    
-                    files = document_generator.generate_document_package(
-                        doc_content,
-                        doc_type,
-                        framework,
-                        company_name,
-                        formats
-                    )
-                    
-                    generated_files[doc_id] = files
-                    
-                    # Add URLs for each generated format
-                    for fmt, filepath in files.items():
-                        filename = filepath.split('/')[-1] if '/' in filepath else filepath.split('\\')[-1]
-                        file_url = f"computer:///mnt/user-data/outputs/{filename}"
-                        document_urls.append(file_url)
-                        
-                        document_manifest.append({
-                            "document_id": doc_id,
-                            "document_type": doc_type.replace('_', ' ').title(),
-                            "format": fmt.upper(),
-                            "url": file_url,
-                            "filename": filename
-                        })
-                    
-                except Exception as e:
-                    logger.error(f"Error generating documents for {doc_id}: {e}")
+                except Exception as fallback_error:
+                    logger.error(f"Even JSON fallback failed for {doc_id}: {fallback_error}")
         
         # Update state with file generation results
         state["generated_files"] = generated_files
