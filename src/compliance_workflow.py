@@ -325,15 +325,18 @@ async def analyze_project_requirements(state: ComplianceAgentState) -> Complianc
             project_type = ProjectType.MULTI_DOCUMENT_PACK  # Since we have multiple specific deliverables
             identified_frameworks = [ComplianceFramework.GDPR]  # Default, could be extracted from blueprint
             
-            # Convert blueprint to required_documents format
+            # Convert blueprint to required_documents format - CREATE ONE FOR EACH DELIVERABLE
             required_documents = []
             for i, blueprint_item in enumerate(deliverable_blueprint):
-                # Map blueprint to document requirement format
+                # Create a unique document for EACH deliverable item
+                logger.info(f"Processing deliverable {i+1}/{len(deliverable_blueprint)}: {blueprint_item.get('title', 'Untitled')}")
+                
+                # Map blueprint to document requirement format with unique identifiers
                 doc_req = {
-                    "document_type": _map_blueprint_to_document_type(blueprint_item.get("title", "")),
+                    "document_type": f"deliverable_{i+1}",  # Unique type for each deliverable
                     "document_title": blueprint_item.get("title", f"Document {i+1}"),
-                    "priority": "critical" if "policy" in blueprint_item.get("title", "").lower() else "high",
-                    "complexity": "high",  # Assume high for detailed blueprints
+                    "priority": "critical",  # All blueprint items are critical
+                    "complexity": "high",  # Detailed blueprints are complex
                     "estimated_effort": "high",
                     "dependencies": [],
                     "frameworks_applicable": ["gdpr"],  # Could extract from blueprint
@@ -342,9 +345,13 @@ async def analyze_project_requirements(state: ComplianceAgentState) -> Complianc
                     "length_estimate": "comprehensive",
                     "special_requirements": blueprint_item.get("description", ""),
                     "quality_requirements": blueprint_item.get("quality_requirements", []),
-                    "blueprint_specification": blueprint_item  # Keep original blueprint for reference
+                    "blueprint_specification": blueprint_item,  # Keep original blueprint for reference
+                    "deliverable_index": i,  # Track position in blueprint
+                    "is_from_blueprint": True  # Flag to indicate this came from blueprint
                 }
                 required_documents.append(doc_req)
+            
+            logger.info(f"Created {len(required_documents)} document requirements from {len(deliverable_blueprint)} blueprint items")
             
             # Update state with extracted information
             state["project_type"] = project_type
@@ -497,18 +504,41 @@ async def create_document_plans(state: ComplianceAgentState) -> ComplianceAgentS
         
         for i, doc_req in enumerate(required_documents):
             # Create detailed plan for each document
-            planning_prompt = f"""
-            You are a compliance document specialist. Create a detailed execution plan for the following document requirement.
+            # Special handling for blueprint-based documents
+            if doc_req.get('is_from_blueprint'):
+                blueprint_spec = doc_req.get('blueprint_specification', {})
+                planning_prompt = f"""
+                You are a compliance document specialist. Create a detailed execution plan for this SPECIFIC deliverable from the project blueprint.
 
-            DOCUMENT REQUIREMENT:
-            {json.dumps(doc_req, indent=2)}
-            
-            PROJECT CONTEXT:
-            - Project Type: {project_type.value if project_type else 'Unknown'}
-            - Frameworks: {', '.join([f.value.upper() for f in frameworks])}
-            - Industry: {state.get('industry_sector', 'Not specified')}
-            - Organization Size: {state.get('organization_size', 'Not specified')}
-            - Geographic Scope: {', '.join(state.get('geographic_scope', []))}
+                DELIVERABLE SPECIFICATION:
+                Title: {doc_req.get('document_title')}
+                Format: {doc_req.get('format_requirements')}
+                Description: {doc_req.get('special_requirements')}
+                Quality Requirements: {json.dumps(doc_req.get('quality_requirements', []), indent=2)}
+                
+                ORIGINAL BLUEPRINT:
+                {json.dumps(blueprint_spec, indent=2)}
+                
+                PROJECT CONTEXT:
+                - This is deliverable {doc_req.get('deliverable_index', 0) + 1} of {len(required_documents)} total deliverables
+                - Project Type: {project_type.value if project_type else 'Unknown'}
+                - Frameworks: {', '.join([f.value.upper() for f in frameworks])}
+                - Industry: {state.get('industry_sector', 'Not specified')}
+                - Organization Size: {state.get('organization_size', 'Not specified')}
+                - Geographic Scope: {', '.join(state.get('geographic_scope', []))}"""
+            else:
+                planning_prompt = f"""
+                You are a compliance document specialist. Create a detailed execution plan for the following document requirement.
+
+                DOCUMENT REQUIREMENT:
+                {json.dumps(doc_req, indent=2)}
+                
+                PROJECT CONTEXT:
+                - Project Type: {project_type.value if project_type else 'Unknown'}
+                - Frameworks: {', '.join([f.value.upper() for f in frameworks])}
+                - Industry: {state.get('industry_sector', 'Not specified')}
+                - Organization Size: {state.get('organization_size', 'Not specified')}
+                - Geographic Scope: {', '.join(state.get('geographic_scope', []))}"""
             
             USER CONTEXT (for personalization):
             - User Responses: {json.dumps(state.get('user_responses', {}), indent=2) if state.get('user_responses') else 'No user responses available'}
@@ -582,8 +612,15 @@ async def create_document_plans(state: ComplianceAgentState) -> ComplianceAgentS
         state["document_plans"] = document_plans
         state["document_status"] = {plan["document_id"]: DocumentStatus.PENDING for plan in document_plans}
         
+        # Create detailed message about planned documents
+        doc_list = "\n".join([f"  {i+1}. {plan['document_requirement']['document_title']}" 
+                              for i, plan in enumerate(document_plans)])
+        
         state["messages"].append(AIMessage(
-            content=f"Document planning complete: {len(document_plans)} detailed execution plans created."
+            content=f"""Document planning complete: {len(document_plans)} detailed execution plans created.
+            
+Documents to be generated:
+{doc_list}"""
         ))
         
         state["status"] = AssessmentStatus.GENERATING_DOCUMENTS
@@ -604,18 +641,40 @@ async def generate_single_document(document_plan: Dict[str, Any], context: Dict[
         
         llm = llm_manager.get_standard_llm()
         
-        # Enhanced document generation prompt
-        generation_prompt = f"""
-        You are a compliance document specialist. Generate a high-quality compliance document based on the detailed execution plan.
+        # Special handling for blueprint-based documents
+        if doc_req.get('is_from_blueprint'):
+            blueprint_spec = doc_req.get('blueprint_specification', {})
+            
+            # Enhanced document generation prompt for blueprint deliverables
+            generation_prompt = f"""
+            You are a compliance document specialist. Generate the EXACT deliverable specified in the blueprint.
 
-        DOCUMENT REQUIREMENT:
-        {json.dumps(doc_req, indent=2)}
-        
-        EXECUTION PLAN:
-        {json.dumps(exec_plan, indent=2)}
-        
-        PROJECT CONTEXT:
-        {json.dumps(context, indent=2)}
+            DELIVERABLE TITLE: {doc_req.get('document_title')}
+            
+            BLUEPRINT SPECIFICATION:
+            {json.dumps(blueprint_spec, indent=2)}
+            
+            EXECUTION PLAN:
+            {json.dumps(exec_plan, indent=2)}
+            
+            PROJECT CONTEXT:
+            {json.dumps(context, indent=2)}
+            
+            CRITICAL: This is one of multiple specific deliverables requested. Generate ONLY this specific document,
+            focusing entirely on the requirements in the blueprint specification above."""
+        else:
+            # Standard document generation prompt
+            generation_prompt = f"""
+            You are a compliance document specialist. Generate a high-quality compliance document based on the detailed execution plan.
+
+            DOCUMENT REQUIREMENT:
+            {json.dumps(doc_req, indent=2)}
+            
+            EXECUTION PLAN:
+            {json.dumps(exec_plan, indent=2)}
+            
+            PROJECT CONTEXT:
+            {json.dumps(context, indent=2)}"""
         
         Generate the complete document content in JSON format:
         {{
