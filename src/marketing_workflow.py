@@ -24,6 +24,13 @@ from concurrent.futures import ThreadPoolExecutor
 import base64
 from io import BytesIO
 
+# Configure logging FIRST before using logger
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
 # Document generation imports
 try:
     from docx import Document
@@ -50,13 +57,6 @@ except ImportError:
 from llm_utils import llm_manager
 from config import config
 from storage_utils import storage_manager, cosmos_manager
-
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
 
 class DocumentStatus(str, Enum):
     PENDING = "pending"

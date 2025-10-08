@@ -35,20 +35,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Enhanced Compliance Framework Support
-class ComplianceFramework(str, Enum):
-    GDPR = "gdpr"
-    SOX = "sox"
-    HIPAA = "hipaa"
-    CCPA = "ccpa"
-    PCI_DSS = "pci_dss"
-    ISO_27001 = "iso_27001"
-    NIST = "nist"
-    SOC2 = "soc2"
-    FERPA = "ferpa"
-    GLBA = "glba"
-    PIPEDA = "pipeda"
-    LGPD = "lgpd"
+# Dynamic Compliance Framework Support
+# No enum - frameworks are passed dynamically from content-orchestrator
+# This allows support for any compliance framework without code changes
 
 class ProjectType(str, Enum):
     PRIVACY_POLICY_PACK = "privacy_policy_pack"
@@ -109,7 +98,7 @@ class ComplianceAgentState(TypedDict):
     
     # Project Analysis
     project_type: Optional[ProjectType]
-    identified_frameworks: List[ComplianceFramework]
+    identified_frameworks: List[str]
     project_complexity: str
     estimated_duration: Optional[str]
     required_documents: List[Dict[str, Any]]
@@ -290,6 +279,101 @@ def _extract_target_audience(description: str) -> str:
     else:
         return "legal"  # Default to legal for compliance documents
 
+def _detect_frameworks_from_text(text: str) -> List[str]:
+    """Detect compliance frameworks mentioned in text using keywords"""
+    if not text:
+        return []
+    
+    text_lower = text.lower()
+    detected_frameworks = []
+    
+    # Common framework keywords mapping - flexible detection
+    framework_keywords = {
+        "gdpr": ["gdpr", "general data protection", "eu data", "european privacy"],
+        "sox": ["sox", "sarbanes", "sarbanes-oxley", "sarbox"],
+        "hipaa": ["hipaa", "health insurance portability", "phi", "protected health"],
+        "ccpa": ["ccpa", "california consumer privacy", "ccpa/cpra", "cpra"],
+        "pci_dss": ["pci", "pci-dss", "pci dss", "payment card"],
+        "iso_27001": ["iso", "iso 27001", "iso27001", "iso-27001"],
+        "nist": ["nist", "national institute"],
+        "soc2": ["soc2", "soc 2", "soc ii", "service organization control"],
+        "ferpa": ["ferpa", "family educational", "student records"],
+        "glba": ["glba", "gramm-leach", "financial services"],
+        "pipeda": ["pipeda", "personal information protection", "canadian privacy"],
+        "lgpd": ["lgpd", "lei geral", "brazilian data", "brazil data protection"]
+    }
+    
+    for framework_name, keywords in framework_keywords.items():
+        if any(keyword in text_lower for keyword in keywords):
+            detected_frameworks.append(framework_name)
+    
+    return detected_frameworks
+
+def _infer_frameworks_from_context(geographic_scope: List[str], industry_sector: str) -> List[str]:
+    """Infer compliance frameworks based on geographic scope and industry"""
+    frameworks = []
+    
+    # Geographic-based inference
+    if geographic_scope:
+        geo_lower = [g.lower() for g in geographic_scope]
+        
+        # European Union
+        if any(region in geo_lower for region in ["eu", "europe", "european union", "uk", "germany", "france", "spain", "italy"]):
+            frameworks.append("gdpr")
+        
+        # United States
+        if any(region in geo_lower for region in ["us", "usa", "united states", "california", "us-west", "us-east"]):
+            frameworks.append("ccpa")
+        
+        # Canada
+        if any(region in geo_lower for region in ["canada", "canadian"]):
+            frameworks.append("pipeda")
+        
+        # Brazil
+        if any(region in geo_lower for region in ["brazil", "brazilian"]):
+            frameworks.append("lgpd")
+    
+    # Industry-based inference
+    if industry_sector:
+        industry_lower = industry_sector.lower()
+        
+        # Healthcare
+        if any(term in industry_lower for term in ["healthcare", "health", "medical", "hospital", "clinical"]):
+            frameworks.append("hipaa")
+        
+        # Financial services
+        if any(term in industry_lower for term in ["financial", "finance", "bank", "fintech", "payment", "credit card"]):
+            frameworks.append("pci_dss")
+            frameworks.append("glba")
+            frameworks.append("sox")
+        
+        # Education
+        if any(term in industry_lower for term in ["education", "school", "university", "college", "student"]):
+            frameworks.append("ferpa")
+        
+        # Technology / SaaS (common frameworks)
+        if any(term in industry_lower for term in ["saas", "software", "technology", "tech", "cloud"]):
+            frameworks.append("soc2")
+            frameworks.append("iso_27001")
+    
+    # Remove duplicates while preserving order
+    seen = set()
+    unique_frameworks = []
+    for fw in frameworks:
+        if fw not in seen:
+            seen.add(fw)
+            unique_frameworks.append(fw)
+    
+    return unique_frameworks
+
+def _get_primary_framework_for_file_naming(frameworks: List[str]) -> str:
+    """Get primary framework for file naming (first framework or intelligent default)"""
+    if not frameworks:
+        return "compliance"  # Generic default when no frameworks identified
+    
+    # Return first framework
+    return frameworks[0]
+
 # Enhanced Node Functions
 async def analyze_project_requirements(state: ComplianceAgentState) -> ComplianceAgentState:
     """Analyze incoming project plan and deliverable blueprint from content-orchestrator"""
@@ -323,13 +407,51 @@ async def analyze_project_requirements(state: ComplianceAgentState) -> Complianc
             
             # Extract project details from the blueprint structure
             project_type = ProjectType.MULTI_DOCUMENT_PACK  # Since we have multiple specific deliverables
-            identified_frameworks = [ComplianceFramework.GDPR]  # Default, could be extracted from blueprint
+            
+            # FIXED: Extract frameworks from context instead of hardcoding GDPR
+            identified_frameworks = []
+            
+            # Try to extract from project_brief first (most reliable)
+            if project_brief and "compliance_context" in project_brief:
+                compliance_context = project_brief["compliance_context"]
+                if "frameworks" in compliance_context:
+                    for fw in compliance_context["frameworks"]:
+                        # Normalize framework name
+                        normalized_fw = fw.lower().replace("-", "_").replace(" ", "_")
+                        identified_frameworks.append(normalized_fw)
+            
+            # Try user_prompt if no frameworks from brief
+            if not identified_frameworks and user_prompt:
+                identified_frameworks = _detect_frameworks_from_text(user_prompt)
+            
+            # Try project_plan if still empty
+            if not identified_frameworks and project_plan.get("frameworks"):
+                for fw in project_plan.get("frameworks", []):
+                    # Normalize framework name
+                    normalized_fw = fw.lower().replace("-", "_").replace(" ", "_")
+                    identified_frameworks.append(normalized_fw)
+            
+            # If still no frameworks, infer from geographic scope or industry
+            if not identified_frameworks:
+                geo_scope = project_brief.get("geographic_scope", project_plan.get("geographic_scope", []))
+                industry = project_brief.get("industry_sector", project_plan.get("industry_sector", ""))
+                identified_frameworks = _infer_frameworks_from_context(geo_scope, industry)
+            
+            # Absolute last resort - use most common compliance framework
+            if not identified_frameworks:
+                logger.warning("No frameworks detected through any method - using GDPR as last resort fallback")
+                identified_frameworks = ["gdpr"]
+            
+            logger.info(f"Identified frameworks: {identified_frameworks}")
             
             # Convert blueprint to required_documents format - CREATE ONE FOR EACH DELIVERABLE
             required_documents = []
             for i, blueprint_item in enumerate(deliverable_blueprint):
                 # Create a unique document for EACH deliverable item
                 logger.info(f"Processing deliverable {i+1}/{len(deliverable_blueprint)}: {blueprint_item.get('title', 'Untitled')}")
+                
+                # Use detected frameworks
+                frameworks_list = identified_frameworks
                 
                 # Map blueprint to document requirement format with unique identifiers
                 doc_req = {
@@ -339,7 +461,7 @@ async def analyze_project_requirements(state: ComplianceAgentState) -> Complianc
                     "complexity": "high",  # Detailed blueprints are complex
                     "estimated_effort": "high",
                     "dependencies": [],
-                    "frameworks_applicable": ["gdpr"],  # Could extract from blueprint
+                    "frameworks_applicable": frameworks_list,  # FIXED: Use detected frameworks
                     "target_audience": _extract_target_audience(blueprint_item.get("description", "")),
                     "format_requirements": blueprint_item.get("format", "html"),
                     "length_estimate": "comprehensive",
@@ -355,7 +477,7 @@ async def analyze_project_requirements(state: ComplianceAgentState) -> Complianc
             
             # Update state with extracted information
             state["project_type"] = project_type
-            state["identified_frameworks"] = [identified_frameworks] if isinstance(identified_frameworks, ComplianceFramework) else identified_frameworks
+            state["identified_frameworks"] = identified_frameworks
             state["project_complexity"] = "very_high"  # Detailed blueprints are complex
             state["estimated_duration"] = "3-6 months"
             state["parallel_execution"] = len(required_documents) > 3  # Parallel for many docs
@@ -374,10 +496,9 @@ async def analyze_project_requirements(state: ComplianceAgentState) -> Complianc
                         # Override or enhance frameworks based on research
                         research_frameworks = []
                         for fw in compliance_context["frameworks"]:
-                            try:
-                                research_frameworks.append(ComplianceFramework(fw.lower().replace("-", "_")))
-                            except ValueError:
-                                logger.warning(f"Unknown framework from research: {fw}")
+                            # Normalize framework name
+                            normalized_fw = fw.lower().replace("-", "_").replace(" ", "_")
+                            research_frameworks.append(normalized_fw)
                         if research_frameworks:
                             identified_frameworks = research_frameworks
             elif project_plan:
@@ -386,7 +507,7 @@ async def analyze_project_requirements(state: ComplianceAgentState) -> Complianc
                 state["geographic_scope"] = project_plan.get("geographic_scope", [])
             
             state["messages"].append(AIMessage(
-                content=f"Project analysis complete using content-orchestrator blueprint: {len(required_documents)} specialized deliverables identified."
+                content=f"Project analysis complete using content-orchestrator blueprint: {len(required_documents)} specialized deliverables identified for frameworks: {', '.join([f.upper() for f in identified_frameworks])}"
             ))
             
         else:
@@ -446,7 +567,8 @@ async def analyze_project_requirements(state: ComplianceAgentState) -> Complianc
             if "error" not in analysis_result:
                 # Process fallback results
                 project_type = ProjectType(analysis_result.get("project_type", "compliance_assessment"))
-                identified_frameworks = [ComplianceFramework(fw) for fw in analysis_result.get("identified_frameworks", [])]
+                # Normalize framework names from LLM response
+                identified_frameworks = [fw.lower().replace("-", "_").replace(" ", "_") for fw in analysis_result.get("identified_frameworks", [])]
                 
                 # Update state with fallback results
                 state["project_type"] = project_type
@@ -460,9 +582,23 @@ async def analyze_project_requirements(state: ComplianceAgentState) -> Complianc
                     content=f"Project analysis complete using fallback logic: {project_type.value} with {len(identified_frameworks)} frameworks."
                 ))
             else:
-                # Ultimate fallback
+                # FIXED: Ultimate fallback with intelligent defaults
+                logger.warning("Analysis failed completely - using intelligent fallback")
+                
+                # Try to detect frameworks from prompt
+                identified_frameworks = _detect_frameworks_from_text(user_prompt)
+                
+                if not identified_frameworks:
+                    geo_scope = project_brief.get("geographic_scope", project_plan.get("geographic_scope", []))
+                    industry = project_brief.get("industry_sector", project_plan.get("industry_sector", ""))
+                    identified_frameworks = _infer_frameworks_from_context(geo_scope, industry)
+                
+                # If still nothing, use general business compliance defaults
+                if not identified_frameworks:
+                    identified_frameworks = ["soc2", "iso_27001"]
+                
                 state["project_type"] = ProjectType.COMPLIANCE_ASSESSMENT
-                state["identified_frameworks"] = [ComplianceFramework.GDPR]
+                state["identified_frameworks"] = identified_frameworks
                 state["project_complexity"] = "medium"
                 state["required_documents"] = [{"document_type": "compliance_checklist", "document_title": "Basic Assessment"}]
         
@@ -522,7 +658,7 @@ async def create_document_plans(state: ComplianceAgentState) -> ComplianceAgentS
                 PROJECT CONTEXT:
                 - This is deliverable {doc_req.get('deliverable_index', 0) + 1} of {len(required_documents)} total deliverables
                 - Project Type: {project_type.value if project_type else 'Unknown'}
-                - Frameworks: {', '.join([f.value.upper() for f in frameworks])}
+                - Frameworks: {', '.join([f.upper() for f in frameworks])}
                 - Industry: {state.get('industry_sector', 'Not specified')}
                 - Organization Size: {state.get('organization_size', 'Not specified')}
                 - Geographic Scope: {', '.join(state.get('geographic_scope', []))}"""
@@ -535,43 +671,44 @@ async def create_document_plans(state: ComplianceAgentState) -> ComplianceAgentS
                 
                 PROJECT CONTEXT:
                 - Project Type: {project_type.value if project_type else 'Unknown'}
-                - Frameworks: {', '.join([f.value.upper() for f in frameworks])}
+                - Frameworks: {', '.join([f.upper() for f in frameworks])}
                 - Industry: {state.get('industry_sector', 'Not specified')}
                 - Organization Size: {state.get('organization_size', 'Not specified')}
                 - Geographic Scope: {', '.join(state.get('geographic_scope', []))}"""
+            planning_prompt += f"""
             
             USER CONTEXT (for personalization):
             - User Responses: {json.dumps(state.get('user_responses', {}), indent=2) if state.get('user_responses') else 'No user responses available'}
             - Project Brief: {json.dumps(state.get('project_brief', {}), indent=2) if state.get('project_brief') else 'No enhanced project brief available'}
             
             Create a detailed execution plan in JSON format:
-            {{
-                "document_id": "doc_{i+1:03d}",
-                "execution_plan": {{
+            {{{{
+                "document_id": "doc_{{i+1:03d}}",
+                "execution_plan": {{{{
                     "research_requirements": [
                         "Research area 1",
                         "Research area 2"
                     ],
                     "content_sections": [
-                        {{
+                        {{{{
                             "section_title": "Section Title",
                             "section_description": "What this section covers",
                             "content_type": "legal|technical|procedural|explanatory",
                             "word_count_estimate": 500,
                             "complexity": "low|medium|high"
-                        }}
+                        }}}}
                     ],
                     "template_approach": "custom|standard|hybrid",
                     "validation_requirements": [
                         "Legal review required",
                         "Technical accuracy check"
                     ],
-                    "format_specifications": {{
+                    "format_specifications": {{{{
                         "primary_format": "html|pdf|word|json|csv",
                         "styling_requirements": "professional|user-friendly|technical|legal"
-                    }}
-                }}
-            }}
+                    }}}}
+                }}}}
+            }}}}
             
             PLANNING REQUIREMENTS:
             1. Consider the specific document type and its compliance requirements
@@ -674,66 +811,66 @@ async def generate_single_document(document_plan: Dict[str, Any], context: Dict[
             {json.dumps(exec_plan, indent=2)}
             
             PROJECT CONTEXT:
-            {json.dumps(context, indent=2)}"""
-        
-        Generate the complete document content in JSON format:
-        {{
-            "document_metadata": {{
-                "document_id": "{document_id}",
-                "title": "Document Title",
-                "document_type": "{doc_req.get('document_type', 'unknown')}",
-                "version": "1.0",
-                "created_date": "{datetime.utcnow().isoformat()}",
-                "applicable_frameworks": [],
-                "target_audience": "{doc_req.get('target_audience', 'general')}",
-                "approval_status": "draft",
-                "word_count": 0
-            }},
-            "document_content": {{
-                "executive_summary": "Brief executive summary of the document",
-                "main_sections": [
-                    {{
-                        "section_id": "section_1",
-                        "section_title": "Section Title",
-                        "section_content": "Complete section content with proper formatting and legal language",
-                        "subsections": [
-                            {{
-                                "subsection_title": "Subsection Title",
-                                "subsection_content": "Detailed content"
-                            }}
-                        ]
-                    }}
-                ],
-                "appendices": [
-                    {{
-                        "appendix_title": "Appendix A",
-                        "appendix_content": "Supporting content"
-                    }}
-                ],
-                "footer_content": "Standard footer with disclaimers and contact information"
-            }},
-            "quality_metrics": {{
-                "completeness_score": 0.95,
-                "accuracy_score": 0.90,
-                "readability_score": 0.85,
-                "compliance_coverage": 0.92
-            }},
-            "next_steps": [
-                "Review and validation step 1",
-                "Review and validation step 2"
-            ]
-        }}
-        
-        GENERATION REQUIREMENTS:
-        1. Create professional, legally sound content appropriate for the document type
-        2. Ensure compliance with specified frameworks
-        3. Use appropriate tone and language for the target audience
-        4. Include all required sections based on the execution plan
-        5. Provide comprehensive, actionable content
-        6. Consider industry-specific requirements and best practices
-        
-        Focus on creating high-quality, professional content that meets enterprise compliance standards.
-        """
+            {json.dumps(context, indent=2)}
+            
+            Generate the complete document content in JSON format:
+            {{{{
+                "document_metadata": {{{{
+                    "document_id": "{document_id}",
+                    "title": "Document Title",
+                    "document_type": "{doc_req.get('document_type', 'unknown')}",
+                    "version": "1.0",
+                    "created_date": "{datetime.utcnow().isoformat()}",
+                    "applicable_frameworks": [],
+                    "target_audience": "{doc_req.get('target_audience', 'general')}",
+                    "approval_status": "draft",
+                    "word_count": 0
+                }}}},
+                "document_content": {{{{
+                    "executive_summary": "Brief executive summary of the document",
+                    "main_sections": [
+                        {{{{
+                            "section_id": "section_1",
+                            "section_title": "Section Title",
+                            "section_content": "Complete section content with proper formatting and legal language",
+                            "subsections": [
+                                {{{{
+                                    "subsection_title": "Subsection Title",
+                                    "subsection_content": "Detailed content"
+                                }}}}
+                            ]
+                        }}}}
+                    ],
+                    "appendices": [
+                        {{{{
+                            "appendix_title": "Appendix A",
+                            "appendix_content": "Supporting content"
+                        }}}}
+                    ],
+                    "footer_content": "Standard footer with disclaimers and contact information"
+                }}}},
+                "quality_metrics": {{{{
+                    "completeness_score": 0.95,
+                    "accuracy_score": 0.90,
+                    "readability_score": 0.85,
+                    "compliance_coverage": 0.92
+                }}}},
+                "next_steps": [
+                    "Review and validation step 1",
+                    "Review and validation step 2"
+                ]
+            }}}}
+            
+            GENERATION REQUIREMENTS:
+            1. Create professional, legally sound content appropriate for the document type
+            2. Ensure compliance with specified frameworks
+            3. Use appropriate tone and language for the target audience
+            4. Include all required sections based on the execution plan
+            5. Provide comprehensive, actionable content
+            6. Consider industry-specific requirements and best practices
+            
+            Focus on creating high-quality, professional content that meets enterprise compliance standards.
+            """
         
         # Execute document generation
         generation_result = await llm_manager.safe_llm_query(llm, generation_prompt, parse_json=True)
@@ -788,7 +925,7 @@ async def execute_document_generation(state: ComplianceAgentState) -> Compliance
         # Prepare context for document generation
         generation_context = {
             "project_type": state.get("project_type", {}).value if state.get("project_type") else "unknown",
-            "frameworks": [f.value for f in state.get("identified_frameworks", [])],
+            "frameworks": state.get("identified_frameworks", []),
             "industry_sector": state.get("industry_sector"),
             "organization_size": state.get("organization_size"),
             "geographic_scope": state.get("geographic_scope", []),
@@ -871,7 +1008,7 @@ async def generate_document_files(state: ComplianceAgentState) -> ComplianceAgen
         state["updated_at"] = datetime.utcnow()
         
         document_results = state.get("document_results", {})
-        frameworks = state.get("identified_frameworks", [ComplianceFramework.GDPR])
+        frameworks = state.get("identified_frameworks", [])
         company_name = state.get("project_brief", {}).get("company_name", 
                                  state.get("project_plan", {}).get("company_name", "Organization"))
         
@@ -899,7 +1036,8 @@ async def generate_document_files(state: ComplianceAgentState) -> ComplianceAgen
             logger.info(f"Generating files for {doc_id} - type: {doc_type}")
             
             try:
-                framework = frameworks[0].value if frameworks else "gdpr"
+                # FIXED: Use intelligent framework naming instead of hardcoded gdpr
+                framework = _get_primary_framework_for_file_naming(frameworks)
                 
                 # Determine formats based on document type
                 doc_type_lower = doc_type.lower()
@@ -1037,7 +1175,7 @@ async def validate_individual_documents(state: ComplianceAgentState) -> Complian
             You are a compliance document validation specialist. Validate the following document against regulatory requirements.
             
             DOCUMENT TYPE: {doc_type}
-            FRAMEWORKS: {', '.join([f.value.upper() for f in frameworks])}
+            FRAMEWORKS: {', '.join([f.upper() for f in frameworks])}
             
             DOCUMENT CONTENT SUMMARY:
             - Title: {doc_metadata.get('title', 'N/A')}
@@ -1188,7 +1326,7 @@ async def validate_cross_document_consistency(state: ComplianceAgentState) -> Co
         DOCUMENTS TO VALIDATE:
         {json.dumps(doc_summaries, indent=2)}
         
-        FRAMEWORKS: {', '.join([f.value.upper() for f in frameworks])}
+        FRAMEWORKS: {', '.join([f.upper() for f in frameworks])}
         
         Perform cross-document consistency validation and provide results in JSON format:
         {{
@@ -1435,7 +1573,7 @@ async def consolidate_project_results(state: ComplianceAgentState) -> Compliance
         
         # Create compliance assessment based on validation results
         compliance_assessment = {
-            "frameworks_covered": [f.value for f in frameworks],
+            "frameworks_covered": frameworks,
             "compliance_score": validation_summary.get("validation_rate", 0) * 100 if validation_summary else 0,
             "risk_level": requirements_validation.get("validation_data", {}).get("risk_assessment", {}).get("compliance_risk_level", "unknown"),
             "validation_results": {
@@ -1453,7 +1591,7 @@ async def consolidate_project_results(state: ComplianceAgentState) -> Compliance
         
         # Create compliance coverage details
         compliance_coverage = {
-            "frameworks": {f.value: {
+            "frameworks": {f: {
                 "covered": True,
                 "completeness": validation_summary.get("validation_rate", 0) * 100 if validation_summary else 0,
                 "document_count": successful_docs
@@ -1478,7 +1616,7 @@ async def consolidate_project_results(state: ComplianceAgentState) -> Compliance
             "completion_status": "completed" if successful_docs == total_docs else "partially_completed",
             "total_documents_generated": successful_docs,
             "total_files_created": files_generated,
-            "frameworks_addressed": [f.value for f in frameworks],
+            "frameworks_addressed": frameworks,
             "overall_compliance_score": compliance_assessment["compliance_score"],
             "risk_assessment": compliance_assessment["risk_level"],
             "key_findings": [
@@ -1590,16 +1728,16 @@ async def consolidate_project_results(state: ComplianceAgentState) -> Compliance
         
         # Create final success message
         state["messages"].append(AIMessage(
-            content=f"""✅ Project Complete!
+            content=f"""Project Complete!
             
-            📊 Summary:
+            Summary:
             - Generated {successful_docs}/{total_docs} documents successfully
             - Created {files_generated} files (DOCX, PDF, Excel)
             - Validation score: {compliance_assessment['compliance_score']:.1f}%
             - Risk level: {compliance_assessment['risk_level']}
             - Frameworks covered: {', '.join([f.upper() for f in compliance_assessment['frameworks_covered']])}
             
-            📁 Files available at: /mnt/user-data/outputs/
+            Files available at: /mnt/user-data/outputs/
             
             Next steps have been identified in the action items.
             """
@@ -1663,7 +1801,7 @@ async def health_check() -> Dict[str, Any]:
                 "individual_validation": True,
                 "cross_document_validation": True,
                 "requirements_validation": True,
-                "framework_coverage": len(ComplianceFramework),
+                "framework_support": "dynamic",  # Accepts any framework from content-orchestrator
                 "supported_document_types": len(DocumentType),
                 "project_types": len(ProjectType),
                 "output_formats": ["DOCX", "PDF", "Excel", "CSV"]

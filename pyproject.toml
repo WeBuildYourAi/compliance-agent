@@ -21,7 +21,11 @@ dependencies = [
     "python-dateutil",
     "aiohttp",
     "azure-storage-blob",
-    "azure-cosmos"
+    "azure-cosmos",
+    "python-docx",
+    "reportlab",
+    "openpyxl",
+    "Pillow"
 ]
 
 [project.optional-dependencies]
